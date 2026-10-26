@@ -1,3 +1,6 @@
+-- ==============================================================================
+-- Clean 3D Menu Library for Skeetparser by Fliriz (GitHub Module: Menywka3321-)
+-- ==============================================================================
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
@@ -14,11 +17,23 @@ if _G.Clean3DMenuCleanup then
     pcall(_G.Clean3DMenuCleanup)
 end
 
+local UI = {
+    IsOpen = false,
+    Unloaded = false,
+    Flags = {},
+    Items = {},
+    UnloadCallbacks = {},
+    Tabs3D = {},
+    ActiveTab = "Combat"
+}
+
 local connections = {}
 local instancesToDestroy = {}
+local allRows = {}
 
--- Конфигурация сохранения позиций
-local CONFIG_FILE = "Clean3DMenu_Config.json"
+-- Конфигурация сохранения позиций окна и настроек функций
+local CONFIG_FILE = "Clean3DMenu_PosConfig.json"
+local SETTINGS_FOLDER = "Skeetparser3D_Configs"
 local configData = {
     mainPos = {x = 0.5, y = 0.5, ox = -380, oy = -280},
     mainSize = {w = 760, h = 560},
@@ -26,7 +41,13 @@ local configData = {
     tabsScale = 1.0
 }
 
-local function saveConfig()
+pcall(function()
+    if makefolder and isfolder and not isfolder(SETTINGS_FOLDER) then
+        makefolder(SETTINGS_FOLDER)
+    end
+end)
+
+local function saveWindowPosConfig()
     pcall(function()
         if writefile then
             writefile(CONFIG_FILE, HttpService:JSONEncode(configData))
@@ -34,7 +55,7 @@ local function saveConfig()
     end)
 end
 
-local function loadConfig()
+local function loadWindowPosConfig()
     pcall(function()
         if readfile and isfile and isfile(CONFIG_FILE) then
             local decoded = HttpService:JSONDecode(readfile(CONFIG_FILE))
@@ -42,8 +63,8 @@ local function loadConfig()
         end
     end)
 end
-loadConfig()
--- Защита от битых сохранённых позиций (меню не должно улетать за экран)
+loadWindowPosConfig()
+
 if not configData.mainPos or math.abs(configData.mainPos.y or 0) > 2 or math.abs(configData.mainPos.x or 0) > 2 then
     configData.mainPos = {x = 0.5, y = 0.5, ox = -380, oy = -280}
 end
@@ -68,6 +89,7 @@ screenGui.DisplayOrder = 999999
 screenGui.Enabled = false
 screenGui.Parent = PlayerGui
 table.insert(instancesToDestroy, screenGui)
+UI.ScreenGui = screenGui
 
 local modalShield = Instance.new("TextButton")
 modalShield.Name = "ModalShield"
@@ -112,20 +134,15 @@ for i = 1, 50 do
     })
 end
 
--- 4. Твое фото СПРАВА СНИЗУ ЭКРАНА (без фона)
--- ВАЖНО: чтобы фон пропал, картинка должна быть PNG с прозрачным фоном.
--- Вырежи фон на remove.bg (или в любом редакторе), загрузи PNG на любой прямой хостинг
--- (например imgur / catbox) и вставь прямую ссылку на .png сюда:
+-- 4. Фото справа снизу экрана
 local IMAGE_URL = "https://i.pinimg.com/736x/85/f7/b8/85f7b8894224fd0068d1dab7ea742517.jpg"
--- Либо, если загрузил PNG в Roblox как Decal/Image, впиши asset id сюда (приоритетнее ссылки):
-local IMAGE_ASSET_ID = nil -- например "rbxassetid://123456789"
+local IMAGE_ASSET_ID = nil
 
 local animeImage = Instance.new("ImageLabel")
 animeImage.Name = "BottomRightPhoto"
 local PHOTO_SIZE = 260
 local vp0 = (Camera and Camera.ViewportSize) or Vector2.new(1920, 1080)
 if not configData.photoPos then
-    -- По умолчанию: справа снизу экрана
     configData.photoPos = {
         x = 1 - (PHOTO_SIZE / 2 + 20) / vp0.X,
         y = 1 - (PHOTO_SIZE / 2 + 10) / vp0.Y
@@ -141,18 +158,16 @@ animeImage.ImageTransparency = 0
 animeImage.ScaleType = Enum.ScaleType.Fit
 animeImage.ZIndex = 30
 animeImage.Parent = screenGui
--- Никаких UICorner/рамок: у картинки нет плашки, виден только сам силуэт
 
 task.spawn(function()
     if IMAGE_ASSET_ID then
         animeImage.Image = IMAGE_ASSET_ID
         return
     end
-    -- Загрузка по ссылке (работает в экзекуторах с writefile + getcustomasset)
     local getAsset = getcustomasset or getsynasset
     local httpFn = (syn and syn.request) or request or http_request or (http and http.request)
     if writefile and getAsset and httpFn then
-        local ok, err = pcall(function()
+        pcall(function()
             local res = httpFn({Url = IMAGE_URL, Method = "GET"})
             if res and res.Body and #res.Body > 0 then
                 local ext = IMAGE_URL:lower():match("%.(%w+)$") or "png"
@@ -161,11 +176,9 @@ task.spawn(function()
                 animeImage.Image = getAsset(fileName)
             end
         end)
-        if not ok then warn("Не удалось загрузить фото: " .. tostring(err)) end
     end
 end)
 
--- Перетаскивание фото по экрану (зажми ЛКМ на фото и тяни)
 local draggingPhoto = false
 local photoMouseStart, photoCenterStart
 
@@ -193,12 +206,11 @@ table.insert(connections, UserInputService.InputEnded:Connect(function(input)
     if draggingPhoto and input.UserInputType == Enum.UserInputType.MouseButton1 then
         draggingPhoto = false
         configData.photoPos = {x = animeImage.Position.X.Scale, y = animeImage.Position.Y.Scale}
-        saveConfig()
+        saveWindowPosConfig()
     end
 end))
 
--- 5. Основное меню
--- CanvasGroup нужен, чтобы все элементы меню плавно растворялись вместе (GroupTransparency)
+-- 5. Основная панель меню
 local mainPanel = Instance.new("CanvasGroup")
 mainPanel.Name = "MainPanel"
 mainPanel.GroupTransparency = 0
@@ -210,13 +222,11 @@ mainPanel.BorderSizePixel = 0
 mainPanel.Active = true
 mainPanel.ZIndex = 5
 mainPanel.Parent = screenGui
+UI.MainPanel = mainPanel
 
 Instance.new("UICorner", mainPanel).CornerRadius = UDim.new(0, 16)
-
--- Базовая позиция меню (от неё считаются анимации открытия/закрытия)
 local panelHome = mainPanel.Position
 
--- Шапка для перетаскивания меню
 local dragBar = Instance.new("TextButton")
 dragBar.Size = UDim2.new(1, -200, 0, 60)
 dragBar.BackgroundTransparency = 1
@@ -225,7 +235,6 @@ dragBar.AutoButtonColor = false
 dragBar.ZIndex = 10
 dragBar.Parent = mainPanel
 
--- Ручка изменения размера основного меню
 local resizeHandle = Instance.new("TextButton")
 resizeHandle.Size = UDim2.new(0, 22, 0, 22)
 resizeHandle.Position = UDim2.new(1, -22, 1, -22)
@@ -237,12 +246,11 @@ resizeHandle.ZIndex = 20
 resizeHandle.Parent = mainPanel
 Instance.new("UICorner", resizeHandle).CornerRadius = UDim.new(0, 6)
 
--- Заголовок вкладки
 local headerTitle = Instance.new("TextLabel")
 headerTitle.Size = UDim2.new(0.5, 0, 0, 40)
 headerTitle.Position = UDim2.new(0, 30, 0, 24)
 headerTitle.BackgroundTransparency = 1
-headerTitle.Text = "Visuals"
+headerTitle.Text = "Combat"
 headerTitle.Font = Enum.Font.GothamBold
 headerTitle.TextSize = 26
 headerTitle.TextColor3 = Color3.fromRGB(245, 245, 250)
@@ -250,7 +258,6 @@ headerTitle.TextXAlignment = Enum.TextXAlignment.Left
 headerTitle.ZIndex = 6
 headerTitle.Parent = mainPanel
 
--- Кнопка выгрузки (Unload)
 local unloadBtn = Instance.new("TextButton")
 unloadBtn.Size = UDim2.new(0, 150, 0, 32)
 unloadBtn.Position = UDim2.new(1, -180, 0, 26)
@@ -266,7 +273,6 @@ unloadBtn.ZIndex = 12
 unloadBtn.Parent = mainPanel
 Instance.new("UICorner", unloadBtn).CornerRadius = UDim.new(0, 8)
 
--- Линия разделителя
 local divider = Instance.new("Frame")
 divider.Size = UDim2.new(1, -60, 0, 1)
 divider.Position = UDim2.new(0, 30, 0, 76)
@@ -276,7 +282,6 @@ divider.BorderSizePixel = 0
 divider.ZIndex = 6
 divider.Parent = mainPanel
 
--- Скролл функций (исправлена верстка и предотвращено наложение)
 local itemsList = Instance.new("ScrollingFrame")
 itemsList.Size = UDim2.new(1, -48, 1, -100)
 itemsList.Position = UDim2.new(0, 24, 0, 88)
@@ -290,11 +295,10 @@ itemsList.ZIndex = 6
 itemsList.Parent = mainPanel
 
 local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 10)
+listLayout.Padding = UDim.new(0, 8)
 listLayout.SortOrder = Enum.SortOrder.LayoutOrder
 listLayout.Parent = itemsList
 
--- Логика перетаскивания и ресайза главного окна
 local dragging, resizing = false, false
 local dragStart, startPos, startSize
 
@@ -308,7 +312,7 @@ dragBar.InputBegan:Connect(function(input)
                 dragging = false
                 panelHome = mainPanel.Position
                 configData.mainPos = {x = mainPanel.Position.X.Scale, ox = mainPanel.Position.X.Offset, y = mainPanel.Position.Y.Scale, oy = mainPanel.Position.Y.Offset}
-                saveConfig()
+                saveWindowPosConfig()
             end
         end)
     end
@@ -323,7 +327,7 @@ resizeHandle.InputBegan:Connect(function(input)
             if input.UserInputState == Enum.UserInputState.End then
                 resizing = false
                 configData.mainSize = {w = mainPanel.AbsoluteSize.X, h = mainPanel.AbsoluteSize.Y}
-                saveConfig()
+                saveWindowPosConfig()
             end
         end)
     end
@@ -343,9 +347,9 @@ table.insert(connections, UserInputService.InputChanged:Connect(function(input)
     end
 end))
 
--- 6. Левые 3D-Вкладки
-local PART_SIZE = Vector3.new(1.5, 2.3, 0.05)
-local CANVAS_SIZE = Vector2.new(300, 480)
+-- 6. Левые 3D-Вкладки (адаптировано под 8 вкладок)
+local PART_SIZE = Vector3.new(1.5, 2.75, 0.05)
+local CANVAS_SIZE = Vector2.new(300, 560)
 
 local tabsPart = Instance.new("Part")
 tabsPart.Name = "Menu3DTabsPart"
@@ -360,7 +364,7 @@ table.insert(instancesToDestroy, tabsPart)
 
 local tabsSurface = Instance.new("SurfaceGui")
 tabsSurface.Name = "Tabs3DSurface"
-tabsSurface.ResetOnSpawn = false -- FIX: иначе вкладки пропадают после смерти
+tabsSurface.ResetOnSpawn = false
 tabsSurface.Adornee = tabsPart
 tabsSurface.Face = Enum.NormalId.Back
 tabsSurface.CanvasSize = CANVAS_SIZE
@@ -377,7 +381,7 @@ tabsHolder.BackgroundTransparency = 1
 tabsHolder.Parent = tabsSurface
 
 local tabsDragArea = Instance.new("TextButton")
-tabsDragArea.Size = UDim2.new(1, 0, 0, 40)
+tabsDragArea.Size = UDim2.new(1, 0, 0, 30)
 tabsDragArea.BackgroundTransparency = 1
 tabsDragArea.Text = ""
 tabsDragArea.ZIndex = 50
@@ -392,11 +396,9 @@ tabsDragArea.MouseButton1Down:Connect(function()
 end)
 
 table.insert(connections, UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        if isDraggingTabs then
-            isDraggingTabs = false
-            saveConfig()
-        end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 and isDraggingTabs then
+        isDraggingTabs = false
+        saveWindowPosConfig()
     end
 end))
 
@@ -405,39 +407,45 @@ table.insert(connections, UserInputService.InputChanged:Connect(function(input)
         local currentMouse = UserInputService:GetMouseLocation()
         local delta = currentMouse - tabsDragStart
         tabsDragStart = currentMouse
-
         configData.tabsOffset.x = configData.tabsOffset.x + (delta.X * 0.003)
         configData.tabsOffset.y = configData.tabsOffset.y - (delta.Y * 0.003)
     elseif input.UserInputType == Enum.UserInputType.MouseWheel and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
         configData.tabsScale = math.clamp(configData.tabsScale + (input.Position.Z > 0 and 0.05 or -0.05), 0.7, 1.6)
         tabsPart.Size = PART_SIZE * configData.tabsScale
-        saveConfig()
+        saveWindowPosConfig()
     end
 end))
 
 local tabButtons3D = {}
-local activeTabName = "Visuals"
 
-local function create3DTab(name, index)
-    local yPos = 25 + (index - 1) * 78
+function UI:SwitchTab(newTabName)
+    UI.ActiveTab = newTabName
+    headerTitle.Text = newTabName
+    for _, item in ipairs(allRows) do
+        item.ui.Visible = (item.category == newTabName)
+    end
+end
+
+function UI:CreateTab(name)
+    local index = #tabButtons3D + 1
+    local yPos = 18 + (index - 1) * 65
     local defaultPos = UDim2.new(0, 25, 0, yPos)
-    local hoverPos = UDim2.new(0, 40, 0, yPos - 3)
+    local hoverPos = UDim2.new(0, 40, 0, yPos - 2)
 
     local btn = Instance.new("Frame")
     btn.Name = name
-    btn.Size = UDim2.new(0, 240, 0, 58)
+    btn.Size = UDim2.new(0, 240, 0, 52)
     btn.Position = defaultPos
     btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     btn.BackgroundTransparency = 0.38
     btn.BorderSizePixel = 0
     btn.ZIndex = 5
     btn.Parent = tabsHolder
-
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 12)
 
     local neonGlow = Instance.new("Frame")
-    neonGlow.Size = UDim2.new(1, 18, 1, 18)
-    neonGlow.Position = UDim2.new(0, -9, 0, -9)
+    neonGlow.Size = UDim2.new(1, 16, 1, 16)
+    neonGlow.Position = UDim2.new(0, -8, 0, -8)
     neonGlow.BackgroundColor3 = Color3.fromRGB(220, 225, 235)
     neonGlow.BackgroundTransparency = 1
     neonGlow.ZIndex = 3
@@ -451,20 +459,13 @@ local function create3DTab(name, index)
     neonStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     neonStroke.Parent = btn
 
-    local strokeGrad = Instance.new("UIGradient")
-    strokeGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(240, 240, 245)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 185, 195))
-    })
-    strokeGrad.Parent = neonStroke
-
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, -25, 1, 0)
     lbl.Position = UDim2.new(0, 18, 0, 0)
     lbl.BackgroundTransparency = 1
     lbl.Text = name
     lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 17
+    lbl.TextSize = 16
     lbl.TextColor3 = Color3.fromRGB(25, 28, 35)
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.ZIndex = 6
@@ -480,7 +481,7 @@ local function create3DTab(name, index)
         xMin = 25,
         xMax = 25 + 240,
         yMin = yPos,
-        yMax = yPos + 58,
+        yMax = yPos + 52,
         isHovered = false
     }
 
@@ -492,7 +493,7 @@ local function create3DTab(name, index)
             TweenService:Create(self.glow, TweenInfo.new(0.16, Enum.EasingStyle.Quad), {BackgroundTransparency = 0.55}):Play()
             TweenService:Create(self.button, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
                 Position = self.hoverPos,
-                Size = UDim2.new(0, 255, 0, 62),
+                Size = UDim2.new(0, 255, 0, 56),
                 BackgroundTransparency = 0.05
             }):Play()
         else
@@ -500,55 +501,102 @@ local function create3DTab(name, index)
             TweenService:Create(self.glow, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {BackgroundTransparency = 1}):Play()
             TweenService:Create(self.button, TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
                 Position = self.defaultPos,
-                Size = UDim2.new(0, 240, 0, 58),
+                Size = UDim2.new(0, 240, 0, 52),
                 BackgroundTransparency = 0.38
             }):Play()
         end
     end
 
     table.insert(tabButtons3D, tabObj)
+    if index == 1 then
+        UI:SwitchTab(name)
+    end
+    return name
 end
 
--- 7. Переключатели функций
-local allToggleRows = {}
+-- ==============================================================================
+-- 7. КОМПОНЕНТЫ ИНТЕРФЕЙСА (TOGGLE, SLIDER, DROPDOWN, KEYBIND, COLOR, BUTTON)
+-- ==============================================================================
+local NEON = Color3.fromRGB(150, 205, 255)
+local rowCounter = 0
 
-local function createToggle(tabCategory, title, desc, order)
-    local row = Instance.new("TextButton")
-    row.LayoutOrder = order
-    row.Size = UDim2.new(1, -12, 0, 56) -- Зафиксирована четкая высота без наложений
+local function makeBaseRow(tabCategory, title, desc, height)
+    rowCounter = rowCounter + 1
+    local row = Instance.new("Frame")
+    row.LayoutOrder = rowCounter
+    row.Size = UDim2.new(1, -12, 0, height or 56)
     row.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
     row.BackgroundTransparency = 0.35
     row.BorderSizePixel = 0
-    row.Text = ""
-    row.AutoButtonColor = false
-    row.Visible = (tabCategory == activeTabName)
+    row.Visible = (tabCategory == UI.ActiveTab)
     row.ZIndex = 7
     row.Parent = itemsList
     Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
 
     local tLabel = Instance.new("TextLabel")
-    tLabel.Size = UDim2.new(0.75, 0, 0, 24)
-    tLabel.Position = UDim2.new(0, 18, 0, 6)
+    tLabel.Size = UDim2.new(0.6, 0, 0, 22)
+    tLabel.Position = UDim2.new(0, 18, 0, 7)
     tLabel.BackgroundTransparency = 1
     tLabel.Text = title
     tLabel.Font = Enum.Font.GothamSemibold
-    tLabel.TextSize = 16
+    tLabel.TextSize = 15
     tLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
     tLabel.TextXAlignment = Enum.TextXAlignment.Left
     tLabel.ZIndex = 8
     tLabel.Parent = row
 
     local dLabel = Instance.new("TextLabel")
-    dLabel.Size = UDim2.new(0.75, 0, 0, 18)
+    dLabel.Size = UDim2.new(0.6, 0, 0, 16)
     dLabel.Position = UDim2.new(0, 18, 0, 30)
     dLabel.BackgroundTransparency = 1
-    dLabel.Text = desc
+    dLabel.Text = desc or ""
     dLabel.Font = Enum.Font.Gotham
-    dLabel.TextSize = 13
+    dLabel.TextSize = 12
     dLabel.TextColor3 = Color3.fromRGB(140, 140, 152)
     dLabel.TextXAlignment = Enum.TextXAlignment.Left
     dLabel.ZIndex = 8
     dLabel.Parent = row
+
+    local rowStroke = Instance.new("UIStroke")
+    rowStroke.Thickness = 1
+    rowStroke.Color = NEON
+    rowStroke.Transparency = 1
+    rowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    rowStroke.Parent = row
+
+    local textStroke = Instance.new("UIStroke")
+    textStroke.Thickness = 1.3
+    textStroke.Color = NEON
+    textStroke.Transparency = 1
+    textStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    textStroke.Parent = tLabel
+
+    row.MouseEnter:Connect(function()
+        TweenService:Create(row, TweenInfo.new(0.15), {BackgroundTransparency = 0.2}):Play()
+        TweenService:Create(rowStroke, TweenInfo.new(0.18), {Transparency = 0.72}):Play()
+        TweenService:Create(textStroke, TweenInfo.new(0.18), {Transparency = 0.15}):Play()
+    end)
+
+    row.MouseLeave:Connect(function()
+        TweenService:Create(row, TweenInfo.new(0.15), {BackgroundTransparency = 0.35}):Play()
+        TweenService:Create(rowStroke, TweenInfo.new(0.2), {Transparency = 1}):Play()
+        TweenService:Create(textStroke, TweenInfo.new(0.2), {Transparency = 1}):Play()
+    end)
+
+    table.insert(allRows, {ui = row, category = tabCategory})
+    return row, tLabel, dLabel
+end
+
+-- 7.1 TOGGLE
+function UI:AddToggle(tabCategory, flag, title, desc, default, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 54)
+
+    local clickBtn = Instance.new("TextButton")
+    clickBtn.Size = UDim2.new(1, 0, 1, 0)
+    clickBtn.BackgroundTransparency = 1
+    clickBtn.Text = ""
+    clickBtn.ZIndex = 9
+    clickBtn.Parent = row
 
     local switchBg = Instance.new("Frame")
     switchBg.Size = UDim2.new(0, 48, 0, 26)
@@ -568,43 +616,14 @@ local function createToggle(tabCategory, title, desc, order)
     knob.Parent = switchBg
     Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
-    local state = false
+    local state = default == true
+    UI.Flags[flag] = state
 
-    -- Неон: тонкая обводка плашки + обводка букв заголовка
-    local NEON = Color3.fromRGB(150, 205, 255)
-
-    local rowStroke = Instance.new("UIStroke")
-    rowStroke.Thickness = 1
-    rowStroke.Color = NEON
-    rowStroke.Transparency = 1
-    rowStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    rowStroke.Parent = row
-
-    -- Неоновый контур самих букв (Contextual = обводка идет по тексту)
-    local textStroke = Instance.new("UIStroke")
-    textStroke.Thickness = 1.5
-    textStroke.Color = NEON
-    textStroke.Transparency = 1
-    textStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-    textStroke.LineJoinMode = Enum.LineJoinMode.Round
-    textStroke.Parent = tLabel
-
-    row.MouseEnter:Connect(function()
-        TweenService:Create(row, TweenInfo.new(0.15), {BackgroundTransparency = 0.2}):Play()
-        TweenService:Create(rowStroke, TweenInfo.new(0.18), {Transparency = 0.72}):Play()
-        TweenService:Create(textStroke, TweenInfo.new(0.18), {Transparency = 0.05}):Play()
-        TweenService:Create(tLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
-    end)
-
-    row.MouseLeave:Connect(function()
-        TweenService:Create(row, TweenInfo.new(0.15), {BackgroundTransparency = 0.35}):Play()
-        TweenService:Create(rowStroke, TweenInfo.new(0.2), {Transparency = 1}):Play()
-        TweenService:Create(textStroke, TweenInfo.new(0.2), {Transparency = 1}):Play()
-        TweenService:Create(tLabel, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(240, 240, 245)}):Play()
-    end)
-
-    row.MouseButton1Click:Connect(function()
-        state = not state
+    local itemObj = { Type = "Toggle", Value = state }
+    function itemObj:Set(val)
+        state = val == true
+        UI.Flags[flag] = state
+        itemObj.Value = state
         if state then
             TweenService:Create(switchBg, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(210, 215, 225)}):Play()
             TweenService:Create(knob, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
@@ -618,17 +637,460 @@ local function createToggle(tabCategory, title, desc, order)
                 BackgroundColor3 = Color3.fromRGB(185, 185, 195)
             }):Play()
         end
+        if callback then pcall(callback, state) end
+    end
+
+    clickBtn.MouseButton1Click:Connect(function()
+        itemObj:Set(not state)
     end)
 
-    table.insert(allToggleRows, {ui = row, category = tabCategory})
+    if state then itemObj:Set(true) end
+    UI.Items[flag] = itemObj
+    return itemObj
 end
 
-local function switchTab(newTabName)
-    activeTabName = newTabName
-    headerTitle.Text = newTabName
-    for _, item in ipairs(allToggleRows) do
-        item.ui.Visible = (item.category == newTabName)
+-- 7.2 SLIDER
+function UI:AddSlider(tabCategory, flag, title, desc, minVal, maxVal, defaultVal, rounding, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 64)
+
+    local valLabel = Instance.new("TextLabel")
+    valLabel.Size = UDim2.new(0, 120, 0, 20)
+    valLabel.Position = UDim2.new(1, -138, 0, 8)
+    valLabel.BackgroundTransparency = 1
+    valLabel.Font = Enum.Font.GothamBold
+    valLabel.TextSize = 14
+    valLabel.TextColor3 = NEON
+    valLabel.TextXAlignment = Enum.TextXAlignment.Right
+    valLabel.ZIndex = 9
+    valLabel.Parent = row
+
+    local barBg = Instance.new("TextButton")
+    barBg.Size = UDim2.new(0, 220, 0, 8)
+    barBg.Position = UDim2.new(1, -238, 0, 36)
+    barBg.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    barBg.BorderSizePixel = 0
+    barBg.Text = ""
+    barBg.AutoButtonColor = false
+    barBg.ZIndex = 9
+    barBg.Parent = row
+    Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
+
+    local barFill = Instance.new("Frame")
+    barFill.Size = UDim2.new(0.5, 0, 1, 0)
+    barFill.BackgroundColor3 = NEON
+    barFill.BorderSizePixel = 0
+    barFill.ZIndex = 10
+    barFill.Parent = barBg
+    Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
+
+    local curVal = defaultVal or minVal
+    UI.Flags[flag] = curVal
+    local itemObj = { Type = "Slider", Value = curVal }
+
+    local function roundNumber(num)
+        if not rounding or rounding <= 0 then
+            return math.floor(num + 0.5)
+        end
+        local mult = 10 ^ rounding
+        return math.floor(num * mult + 0.5) / mult
     end
+
+    function itemObj:Set(v)
+        curVal = math.clamp(roundNumber(tonumber(v) or minVal), minVal, maxVal)
+        UI.Flags[flag] = curVal
+        itemObj.Value = curVal
+        local pct = math.clamp((curVal - minVal) / math.max(maxVal - minVal, 0.0001), 0, 1)
+        barFill.Size = UDim2.new(pct, 0, 1, 0)
+        valLabel.Text = tostring(curVal)
+        if callback then pcall(callback, curVal) end
+    end
+
+    local sliding = false
+    local function updateFromMouse()
+        local mPos = UserInputService:GetMouseLocation()
+        local relX = mPos.X - barBg.AbsolutePosition.X
+        local pct = math.clamp(relX / math.max(barBg.AbsoluteSize.X, 1), 0, 1)
+        itemObj:Set(minVal + (maxVal - minVal) * pct)
+    end
+
+    barBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            sliding = true
+            updateFromMouse()
+        end
+    end)
+
+    table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+        if sliding and input.UserInputType == Enum.UserInputType.MouseMovement then
+            updateFromMouse()
+        end
+    end))
+
+    table.insert(connections, UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            sliding = false
+        end
+    end))
+
+    itemObj:Set(curVal)
+    UI.Items[flag] = itemObj
+    return itemObj
+end
+
+-- 7.3 DROPDOWN (SINGLE & MULTI)
+function UI:AddDropdown(tabCategory, flag, title, desc, values, defaultIdxOrVal, isMulti, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 56)
+
+    local dropBtn = Instance.new("TextButton")
+    dropBtn.Size = UDim2.new(0, 210, 0, 32)
+    dropBtn.Position = UDim2.new(1, -228, 0.5, -16)
+    dropBtn.BackgroundColor3 = Color3.fromRGB(42, 42, 50)
+    dropBtn.BorderSizePixel = 0
+    dropBtn.Font = Enum.Font.GothamSemibold
+    dropBtn.TextSize = 12
+    dropBtn.TextColor3 = Color3.fromRGB(235, 235, 245)
+    dropBtn.TextTruncate = Enum.TextTruncate.AtEnd
+    dropBtn.AutoButtonColor = false
+    dropBtn.ZIndex = 9
+    dropBtn.Parent = row
+    Instance.new("UICorner", dropBtn).CornerRadius = UDim.new(0, 8)
+
+    local listFrame = Instance.new("Frame")
+    listFrame.Size = UDim2.new(1, -24, 0, 0)
+    listFrame.Position = UDim2.new(0, 12, 0, 54)
+    listFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    listFrame.BorderSizePixel = 0
+    listFrame.ClipsDescendants = true
+    listFrame.Visible = false
+    listFrame.ZIndex = 15
+    listFrame.Parent = row
+    Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 8)
+
+    local listLayoutInner = Instance.new("UIListLayout")
+    listLayoutInner.Padding = UDim.new(0, 3)
+    listLayoutInner.Parent = listFrame
+
+    local expanded = false
+    local currentValues = values or {}
+    local itemObj = { Type = isMulti and "MultiDropdown" or "Dropdown", Values = currentValues }
+
+    local selectedMulti = {}
+    local selectedSingle = currentValues[1] or ""
+    if type(defaultIdxOrVal) == "number" and currentValues[defaultIdxOrVal] then
+        selectedSingle = currentValues[defaultIdxOrVal]
+    elseif type(defaultIdxOrVal) == "string" then
+        selectedSingle = defaultIdxOrVal
+    end
+
+    local function updateHeaderText()
+        if isMulti then
+            local names = {}
+            for k, v in pairs(selectedMulti) do
+                if v then table.insert(names, k) end
+            end
+            dropBtn.Text = (#names > 0 and table.concat(names, ", ") or "None") .. " ▾"
+        else
+            dropBtn.Text = tostring(selectedSingle) .. " ▾"
+        end
+    end
+
+    local function rebuildOptions()
+        for _, ch in ipairs(listFrame:GetChildren()) do
+            if ch:IsA("TextButton") then ch:Destroy() end
+        end
+        for _, optName in ipairs(currentValues) do
+            local optBtn = Instance.new("TextButton")
+            optBtn.Size = UDim2.new(1, 0, 0, 26)
+            optBtn.BackgroundColor3 = Color3.fromRGB(34, 34, 42)
+            optBtn.BorderSizePixel = 0
+            optBtn.Font = Enum.Font.GothamMedium
+            optBtn.TextSize = 12
+            optBtn.AutoButtonColor = false
+            optBtn.ZIndex = 16
+            optBtn.Parent = listFrame
+            Instance.new("UICorner", optBtn).CornerRadius = UDim.new(0, 6)
+
+            local function refreshOptVisual()
+                local active = isMulti and selectedMulti[optName] or (selectedSingle == optName)
+                optBtn.Text = (active and "✓ " or "") .. tostring(optName)
+                optBtn.TextColor3 = active and NEON or Color3.fromRGB(200, 200, 210)
+            end
+            refreshOptVisual()
+
+            optBtn.MouseButton1Click:Connect(function()
+                if isMulti then
+                    selectedMulti[optName] = not selectedMulti[optName]
+                    UI.Flags[flag] = selectedMulti
+                    itemObj.Value = selectedMulti
+                    refreshOptVisual()
+                    updateHeaderText()
+                    if callback then pcall(callback, selectedMulti) end
+                else
+                    itemObj:Set(optName)
+                    expanded = false
+                    listFrame.Visible = false
+                    row.Size = UDim2.new(1, -12, 0, 56)
+                end
+            end)
+        end
+    end
+
+    function itemObj:Set(val)
+        if isMulti and type(val) == "table" then
+            selectedMulti = val
+            UI.Flags[flag] = selectedMulti
+            itemObj.Value = selectedMulti
+            rebuildOptions()
+            updateHeaderText()
+            if callback then pcall(callback, selectedMulti) end
+        elseif not isMulti then
+            selectedSingle = tostring(val)
+            UI.Flags[flag] = selectedSingle
+            itemObj.Value = selectedSingle
+            rebuildOptions()
+            updateHeaderText()
+            if callback then pcall(callback, selectedSingle) end
+        end
+    end
+
+    function itemObj:SetValues(newList)
+        currentValues = newList or {}
+        rebuildOptions()
+        if expanded then
+            local h = math.min(#currentValues * 29 + 6, 180)
+            listFrame.Size = UDim2.new(1, -24, 0, h)
+            row.Size = UDim2.new(1, -12, 0, 62 + h)
+        end
+    end
+
+    dropBtn.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        if expanded then
+            rebuildOptions()
+            local h = math.min(#currentValues * 29 + 6, 180)
+            listFrame.Visible = true
+            listFrame.Size = UDim2.new(1, -24, 0, h)
+            row.Size = UDim2.new(1, -12, 0, 62 + h)
+        else
+            listFrame.Visible = false
+            row.Size = UDim2.new(1, -12, 0, 56)
+        end
+    end)
+
+    if isMulti then
+        itemObj:Set({})
+    else
+        itemObj:Set(selectedSingle)
+    end
+    UI.Items[flag] = itemObj
+    return itemObj
+end
+
+-- 7.4 KEYPICKER / KEYBIND
+function UI:AddKeybind(tabCategory, flag, title, desc, defaultKeyName, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 54)
+
+    local keyBtn = Instance.new("TextButton")
+    keyBtn.Size = UDim2.new(0, 120, 0, 30)
+    keyBtn.Position = UDim2.new(1, -138, 0.5, -15)
+    keyBtn.BackgroundColor3 = Color3.fromRGB(42, 42, 50)
+    keyBtn.BorderSizePixel = 0
+    keyBtn.Font = Enum.Font.GothamBold
+    keyBtn.TextSize = 12
+    keyBtn.TextColor3 = NEON
+    keyBtn.AutoButtonColor = false
+    keyBtn.ZIndex = 9
+    keyBtn.Parent = row
+    Instance.new("UICorner", keyBtn).CornerRadius = UDim.new(0, 8)
+
+    local curKey = defaultKeyName or "None"
+    local binding = false
+    UI.Flags[flag] = curKey
+    local itemObj = { Type = "Keybind", Value = curKey }
+
+    function itemObj:Set(kName)
+        curKey = tostring(kName or "None")
+        UI.Flags[flag] = curKey
+        itemObj.Value = curKey
+        keyBtn.Text = "[" .. curKey .. "]"
+        if callback then pcall(callback, curKey) end
+    end
+
+    keyBtn.MouseButton1Click:Connect(function()
+        binding = true
+        keyBtn.Text = "[Press Key...]"
+    end)
+
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input)
+        if not binding then return end
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            binding = false
+            local k = input.KeyCode.Name
+            if k == "Escape" or k == "Backspace" then k = "None" end
+            itemObj:Set(k)
+        end
+    end))
+
+    itemObj:Set(curKey)
+    UI.Items[flag] = itemObj
+    return itemObj
+end
+
+-- 7.5 COLOR PICKER (PRESET + HSV CYCLER)
+local COLOR_PALETTE = {
+    {Name = "Red", Col = Color3.fromRGB(255, 75, 75)},
+    {Name = "Green", Col = Color3.fromRGB(0, 255, 110)},
+    {Name = "Neon Mint", Col = Color3.fromRGB(0, 255, 160)},
+    {Name = "Cyan", Col = Color3.fromRGB(0, 230, 255)},
+    {Name = "Blue", Col = Color3.fromRGB(40, 140, 255)},
+    {Name = "Purple", Col = Color3.fromRGB(190, 60, 255)},
+    {Name = "Pink", Col = Color3.fromRGB(255, 90, 200)},
+    {Name = "Yellow", Col = Color3.fromRGB(255, 225, 60)},
+    {Name = "Orange", Col = Color3.fromRGB(255, 140, 40)},
+    {Name = "White", Col = Color3.fromRGB(255, 255, 255)},
+}
+
+function UI:AddColorPicker(tabCategory, flag, title, desc, defaultColor, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 54)
+
+    local colBtn = Instance.new("TextButton")
+    colBtn.Size = UDim2.new(0, 110, 0, 28)
+    colBtn.Position = UDim2.new(1, -128, 0.5, -14)
+    colBtn.BackgroundColor3 = defaultColor or Color3.fromRGB(0, 255, 150)
+    colBtn.BorderSizePixel = 0
+    colBtn.Text = "Change Color"
+    colBtn.Font = Enum.Font.GothamBold
+    colBtn.TextSize = 11
+    colBtn.TextColor3 = Color3.fromRGB(15, 15, 20)
+    colBtn.AutoButtonColor = false
+    colBtn.ZIndex = 9
+    colBtn.Parent = row
+    Instance.new("UICorner", colBtn).CornerRadius = UDim.new(0, 8)
+
+    local curColor = defaultColor or Color3.fromRGB(0, 255, 150)
+    local paletteIdx = 1
+    UI.Flags[flag] = curColor
+    local itemObj = { Type = "Color", Value = curColor }
+
+    function itemObj:Set(c)
+        if typeof(c) == "Color3" then
+            curColor = c
+        elseif type(c) == "table" and c.r and c.g and c.b then
+            curColor = Color3.new(c.r, c.g, c.b)
+        end
+        UI.Flags[flag] = curColor
+        itemObj.Value = curColor
+        colBtn.BackgroundColor3 = curColor
+        if callback then pcall(callback, curColor) end
+    end
+
+    colBtn.MouseButton1Click:Connect(function()
+        paletteIdx = paletteIdx + 1
+        if paletteIdx > #COLOR_PALETTE then paletteIdx = 1 end
+        itemObj:Set(COLOR_PALETTE[paletteIdx].Col)
+    end)
+
+    itemObj:Set(curColor)
+    UI.Items[flag] = itemObj
+    return itemObj
+end
+
+-- 7.6 BUTTON
+function UI:AddButton(tabCategory, title, desc, btnText, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 54)
+
+    local actBtn = Instance.new("TextButton")
+    actBtn.Size = UDim2.new(0, 140, 0, 32)
+    actBtn.Position = UDim2.new(1, -158, 0.5, -16)
+    actBtn.BackgroundColor3 = Color3.fromRGB(45, 52, 68)
+    actBtn.BorderSizePixel = 0
+    actBtn.Text = btnText or "Execute"
+    actBtn.Font = Enum.Font.GothamBold
+    actBtn.TextSize = 12
+    actBtn.TextColor3 = Color3.fromRGB(240, 245, 255)
+    actBtn.AutoButtonColor = false
+    actBtn.ZIndex = 9
+    actBtn.Parent = row
+    Instance.new("UICorner", actBtn).CornerRadius = UDim.new(0, 8)
+
+    actBtn.MouseButton1Click:Connect(function()
+        if callback then pcall(callback) end
+    end)
+    return actBtn
+end
+
+-- 7.7 TEXT INPUT
+function UI:AddInput(tabCategory, flag, title, desc, placeholder, defaultText, callback)
+    local row = makeBaseRow(tabCategory, title, desc, 54)
+
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0, 180, 0, 30)
+    box.Position = UDim2.new(1, -198, 0.5, -15)
+    box.BackgroundColor3 = Color3.fromRGB(38, 38, 46)
+    box.BorderSizePixel = 0
+    box.PlaceholderText = placeholder or "Enter value..."
+    box.Text = defaultText or ""
+    box.Font = Enum.Font.GothamMedium
+    box.TextSize = 12
+    box.TextColor3 = Color3.fromRGB(240, 240, 250)
+    box.ClearTextOnFocus = false
+    box.ZIndex = 9
+    box.Parent = row
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
+
+    local itemObj = { Type = "Input", Value = defaultText or "" }
+    function itemObj:Set(txt)
+        box.Text = tostring(txt or "")
+        UI.Flags[flag] = box.Text
+        itemObj.Value = box.Text
+        if callback then pcall(callback, box.Text) end
+    end
+
+    box.FocusLost:Connect(function()
+        itemObj:Set(box.Text)
+    end)
+
+    itemObj:Set(defaultText or "")
+    UI.Items[flag] = itemObj
+    return itemObj
+end
+
+-- 7.8 СИСТЕМА СОХРАНЕНИЯ И ЗАГРУЗКИ КОНФИГОВ (ВКЛЮЧАЯ БИНДЫ)
+function UI:SaveConfig(cfgName)
+    pcall(function()
+        if not writefile then return end
+        local data = {}
+        for flag, item in pairs(UI.Items) do
+            if item.Type == "Color" then
+                local c = item.Value
+                data[flag] = {__type = "Color3", r = c.R, g = c.G, b = c.B}
+            else
+                data[flag] = item.Value
+            end
+        end
+        writefile(SETTINGS_FOLDER .. "/" .. (cfgName or "default") .. ".json", HttpService:JSONEncode(data))
+    end)
+end
+
+function UI:LoadConfig(cfgName)
+    pcall(function()
+        local path = SETTINGS_FOLDER .. "/" .. (cfgName or "default") .. ".json"
+        if readfile and isfile and isfile(path) then
+            local decoded = HttpService:JSONDecode(readfile(path))
+            if type(decoded) == "table" then
+                for flag, val in pairs(decoded) do
+                    local item = UI.Items[flag]
+                    if item then
+                        if type(val) == "table" and val.__type == "Color3" then
+                            item:Set(Color3.new(val.r, val.g, val.b))
+                        else
+                            item:Set(val)
+                        end
+                    end
+                end
+            end
+        end
+    end)
 end
 
 -- Курсор
@@ -656,31 +1118,7 @@ ringStroke.Thickness = 1.5
 ringStroke.Color = Color3.fromRGB(210, 215, 225)
 ringStroke.Parent = cursorRing
 
-create3DTab("Visuals", 1)
-create3DTab("Combat", 2)
-create3DTab("Movement", 3)
-create3DTab("Exploits", 4)
-create3DTab("Settings", 5)
-
-createToggle("Visuals", "ESP Box (3D / 2D)", "Отрисовка боксов вокруг моделей игроков", 1)
-createToggle("Visuals", "Player Skeleton", "Подсветка костей персонажа сквозь стены", 2)
-createToggle("Visuals", "Chams Neon Glow", "Заливка игроков светящимся материалом", 3)
-createToggle("Visuals", "Tracers", "Линии до противников от нижней части экрана", 4)
-createToggle("Visuals", "Name & Health Bar", "Отображать никнейм, полоску ХП и дистанцию", 5)
-
-createToggle("Combat", "Silent Aim", "Автоматическая доводка пуль без рывков камеры", 1)
-createToggle("Combat", "FOV Circle (Neon)", "Отображать радиус захвата целей", 2)
-
-createToggle("Movement", "SpeedHack / WalkSpeed", "Увеличение скорости передвижения", 1)
-createToggle("Movement", "Infinite Jump", "Прыжок в воздухе без ограничений", 2)
-
-createToggle("Exploits", "Anti-AFK", "Защита от кика за бездействие", 1)
-createToggle("Exploits", "FullBright", "Отключение темноты и тумана на карте", 2)
-
-createToggle("Settings", "Menu Snowflakes", "Снежинки на фоне открытого меню", 1)
-createToggle("Settings", "Stream Proof", "Скрывать визуалы на записи ОБС", 2)
-
--- Расчет наведения
+-- Расчет наведения на 3D вкладки
 local currentHoveredTab = nil
 
 local function update3DMouseHover(mousePos)
@@ -740,15 +1178,13 @@ local function setInputFreeze(freeze)
     end
 end
 
-local isOpen = false
-local closing = false      -- true пока играет анимация закрытия
-local isLoading = true     -- true пока показывается экран загрузки
-local unloaded = false
+local closing = false
+local isLoading = true
 local animToken = 0
 local startTime = tick()
 
 local renderConn = RunService.RenderStepped:Connect(function(dt)
-    if not (isOpen or closing) then return end
+    if not (UI.IsOpen or closing) then return end
 
     Camera = workspace.CurrentCamera
     if Camera then
@@ -777,15 +1213,15 @@ local renderConn = RunService.RenderStepped:Connect(function(dt)
 end)
 table.insert(connections, renderConn)
 
-local SLIDE = UDim2.new(0, 0, 0, 26) -- на сколько панель "всплывает" при открытии/закрытии
+local SLIDE = UDim2.new(0, 0, 0, 26)
 
-local function toggleMenu(state)
-    if isLoading or unloaded then return end
-    isOpen = state
+function UI:ToggleMenu(state)
+    if isLoading or UI.Unloaded then return end
+    UI.IsOpen = state
     animToken = animToken + 1
     local token = animToken
 
-    if isOpen then
+    if UI.IsOpen then
         closing = false
         screenGui.Enabled = true
         tabsSurface.Enabled = true
@@ -794,12 +1230,11 @@ local function toggleMenu(state)
 
         for i, data in ipairs(tabButtons3D) do
             data.button.Position = UDim2.new(0, -250, 0, data.defaultPos.Y.Offset)
-            TweenService:Create(data.button, TweenInfo.new(0.3 + (i * 0.05), Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+            TweenService:Create(data.button, TweenInfo.new(0.3 + (i * 0.04), Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
                 Position = data.defaultPos
             }):Play()
         end
 
-        -- Основное меню: плавное появление снизу
         mainPanel.GroupTransparency = 1
         mainPanel.Position = panelHome + SLIDE
         TweenService:Create(mainPanel, TweenInfo.new(0.38, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
@@ -807,7 +1242,6 @@ local function toggleMenu(state)
             Position = panelHome
         }):Play()
 
-        -- Фото
         animeImage.ImageTransparency = 1
         TweenService:Create(animeImage, TweenInfo.new(0.4), {ImageTransparency = 0}):Play()
         snowContainer.Visible = true
@@ -816,7 +1250,6 @@ local function toggleMenu(state)
         setInputFreeze(false)
         TweenService:Create(blurEffect, TweenInfo.new(0.32), {Size = 0}):Play()
 
-        -- Вкладки уезжают влево по очереди
         for i, data in ipairs(tabButtons3D) do
             data:SetHover(false)
             TweenService:Create(data.button, TweenInfo.new(0.22 + (i * 0.03), Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
@@ -824,25 +1257,22 @@ local function toggleMenu(state)
             }):Play()
         end
 
-        -- Основное меню растворяется и уходит вниз
         TweenService:Create(mainPanel, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
             GroupTransparency = 1,
             Position = panelHome + SLIDE
         }):Play()
 
-        -- Фото и снег тают
         TweenService:Create(animeImage, TweenInfo.new(0.28), {ImageTransparency = 1}):Play()
         for _, f in ipairs(snowflakes) do
             TweenService:Create(f.ui, TweenInfo.new(0.28), {BackgroundTransparency = 1}):Play()
         end
 
         task.delay(0.42, function()
-            if animToken == token and not isOpen and not unloaded then
+            if animToken == token and not UI.IsOpen and not UI.Unloaded then
                 closing = false
                 screenGui.Enabled = false
                 tabsSurface.Enabled = false
                 mainPanel.Position = panelHome
-                -- вернуть снежинкам прозрачность для следующего открытия
                 for _, f in ipairs(snowflakes) do
                     f.ui.BackgroundTransparency = math.random(30, 70) / 100
                 end
@@ -851,9 +1281,18 @@ local function toggleMenu(state)
     end
 end
 
-local function unloadScript()
-    unloaded = true
+function UI:OnUnload(fn)
+    table.insert(UI.UnloadCallbacks, fn)
+end
+
+function UI:Unload()
+    if UI.Unloaded then return end
+    UI.Unloaded = true
+    UI.IsOpen = false
     setInputFreeze(false)
+    for _, cb in ipairs(UI.UnloadCallbacks) do
+        pcall(cb)
+    end
     for _, conn in ipairs(connections) do
         if conn.Connected then conn:Disconnect() end
     end
@@ -863,25 +1302,19 @@ local function unloadScript()
     _G.Clean3DMenuCleanup = nil
 end
 
-_G.Clean3DMenuCleanup = unloadScript
-unloadBtn.MouseButton1Click:Connect(unloadScript)
+_G.Clean3DMenuCleanup = function() UI:Unload() end
+unloadBtn.MouseButton1Click:Connect(function() UI:Unload() end)
 
--- FIX: восстановление меню после смерти / респавна
 local function restoreAfterRespawn()
-    if unloaded then return end
+    if UI.Unloaded then return end
     Camera = workspace.CurrentCamera
-
-    -- вернуть GUI на место, если он был перемещён/удалён
     if screenGui.Parent ~= PlayerGui then screenGui.Parent = PlayerGui end
     if tabsSurface.Parent ~= PlayerGui then tabsSurface.Parent = PlayerGui end
     if tabsPart.Parent ~= workspace then tabsPart.Parent = workspace end
     tabsSurface.Adornee = tabsPart
+    UI:SwitchTab(UI.ActiveTab)
 
-    -- заново применить текущую вкладку (на случай сброса Visible у плашек)
-    switchTab(activeTabName)
-
-    if isOpen then
-        -- меню было открыто в момент смерти: вернуть видимость и управление
+    if UI.IsOpen then
         screenGui.Enabled = true
         tabsSurface.Enabled = true
         mainPanel.GroupTransparency = 0
@@ -900,24 +1333,22 @@ table.insert(connections, LocalPlayer.CharacterAdded:Connect(function()
     restoreAfterRespawn()
 end))
 
-local inputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if input.KeyCode == Enum.KeyCode.RightShift then
-        toggleMenu(not isOpen)
+table.insert(connections, UserInputService.InputBegan:Connect(function(input)
+    local menuKey = UI.Flags.MenuKeybind or "RightShift"
+    if input.KeyCode.Name == menuKey then
+        UI:ToggleMenu(not UI.IsOpen)
     elseif input.KeyCode == Enum.KeyCode.End then
-        unloadScript()
-    elseif isOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
+        UI:Unload()
+    elseif UI.IsOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
         if currentHoveredTab and not isDraggingTabs then
-            switchTab(currentHoveredTab.name)
+            UI:SwitchTab(currentHoveredTab.name)
         end
     end
-end)
-table.insert(connections, inputConn)
+end))
 
--- ============================================================
 -- 8. Экран загрузки при запуске
--- ============================================================
 task.spawn(function()
-    local ok, err = pcall(function()
+    pcall(function()
         local loaderBlur = Instance.new("BlurEffect")
         loaderBlur.Name = "MenuLoaderBlur"
         loaderBlur.Size = 0
@@ -933,7 +1364,6 @@ task.spawn(function()
         loaderGui.Parent = PlayerGui
         table.insert(instancesToDestroy, loaderGui)
 
-        -- Затемнение + сильный блюр заднего фона
         local dim = Instance.new("Frame")
         dim.Size = UDim2.new(1, 0, 1, 0)
         dim.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -942,139 +1372,9 @@ task.spawn(function()
         dim.ZIndex = 1
         dim.Parent = loaderGui
 
-        -- Небольшая плашка по центру
         local card = Instance.new("CanvasGroup")
         card.AnchorPoint = Vector2.new(0.5, 0.5)
         card.Position = UDim2.new(0.5, 0, 0.5, 0)
         card.Size = UDim2.new(0, 370, 0, 120)
         card.BackgroundColor3 = Color3.fromRGB(18, 18, 23)
-        card.BackgroundTransparency = 0.08
-        card.BorderSizePixel = 0
-        card.GroupTransparency = 1
-        card.ZIndex = 2
-        card.Parent = loaderGui
-        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 16)
-
-        local cardStroke = Instance.new("UIStroke")
-        cardStroke.Thickness = 1
-        cardStroke.Color = Color3.fromRGB(255, 255, 255)
-        cardStroke.Transparency = 0.88
-        cardStroke.Parent = card
-
-        local cardScale = Instance.new("UIScale")
-        cardScale.Scale = 0.88
-        cardScale.Parent = card
-
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -40, 0, 28)
-        title.Position = UDim2.new(0, 20, 0, 18)
-        title.BackgroundTransparency = 1
-        title.Text = "skeetparser for fs by fliriz"
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 20
-        title.TextColor3 = Color3.fromRGB(245, 245, 250)
-        title.TextXAlignment = Enum.TextXAlignment.Center
-        title.ZIndex = 3
-        title.Parent = card
-
-        local titleStroke = Instance.new("UIStroke")
-        titleStroke.Thickness = 1.2
-        titleStroke.Color = Color3.fromRGB(150, 205, 255)
-        titleStroke.Transparency = 0.75
-        titleStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-        titleStroke.Parent = title
-
-        local statusLabel = Instance.new("TextLabel")
-        statusLabel.Size = UDim2.new(0.7, 0, 0, 18)
-        statusLabel.Position = UDim2.new(0, 35, 0, 58)
-        statusLabel.BackgroundTransparency = 1
-        statusLabel.Text = "initializing..."
-        statusLabel.Font = Enum.Font.Gotham
-        statusLabel.TextSize = 13
-        statusLabel.TextColor3 = Color3.fromRGB(140, 140, 152)
-        statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-        statusLabel.ZIndex = 3
-        statusLabel.Parent = card
-
-        local percentLabel = Instance.new("TextLabel")
-        percentLabel.Size = UDim2.new(0.25, 0, 0, 18)
-        percentLabel.Position = UDim2.new(0.75, -35, 0, 58)
-        percentLabel.BackgroundTransparency = 1
-        percentLabel.Text = "0%"
-        percentLabel.Font = Enum.Font.GothamMedium
-        percentLabel.TextSize = 13
-        percentLabel.TextColor3 = Color3.fromRGB(200, 210, 225)
-        percentLabel.TextXAlignment = Enum.TextXAlignment.Right
-        percentLabel.ZIndex = 3
-        percentLabel.Parent = card
-
-        local barBg = Instance.new("Frame")
-        barBg.Size = UDim2.new(1, -70, 0, 6)
-        barBg.Position = UDim2.new(0, 35, 0, 88)
-        barBg.BackgroundColor3 = Color3.fromRGB(45, 45, 54)
-        barBg.BorderSizePixel = 0
-        barBg.ZIndex = 3
-        barBg.Parent = card
-        Instance.new("UICorner", barBg).CornerRadius = UDim.new(1, 0)
-
-        local barFill = Instance.new("Frame")
-        barFill.Size = UDim2.new(0, 0, 1, 0)
-        barFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        barFill.BorderSizePixel = 0
-        barFill.ZIndex = 4
-        barFill.Parent = barBg
-        Instance.new("UICorner", barFill).CornerRadius = UDim.new(1, 0)
-
-        local fillGrad = Instance.new("UIGradient")
-        fillGrad.Color = ColorSequence.new({
-            ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 205, 255)),
-            ColorSequenceKeypoint.new(1, Color3.fromRGB(240, 240, 250))
-        })
-        fillGrad.Parent = barFill
-
-        barFill:GetPropertyChangedSignal("Size"):Connect(function()
-            percentLabel.Text = math.floor(barFill.Size.X.Scale * 100 + 0.5) .. "%"
-        end)
-
-        -- Появление
-        TweenService:Create(loaderBlur, TweenInfo.new(0.5), {Size = 48}):Play()
-        TweenService:Create(dim, TweenInfo.new(0.5), {BackgroundTransparency = 0.5}):Play()
-        TweenService:Create(card, TweenInfo.new(0.45, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {GroupTransparency = 0}):Play()
-        TweenService:Create(cardScale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
-        task.wait(0.55)
-
-        -- Этапы загрузки
-        local stages = {
-            {0.20, "loading modules...", 0.55},
-            {0.47, "building interface...", 0.7},
-            {0.74, "applying config...", 0.6},
-            {0.93, "finalizing...", 0.5},
-            {1.00, "ready", 0.3},
-        }
-        for _, st in ipairs(stages) do
-            statusLabel.Text = st[2]
-            local t = TweenService:Create(barFill, TweenInfo.new(st[3], Enum.EasingStyle.Quad, Enum.EasingDirection.InOut), {
-                Size = UDim2.new(st[1], 0, 1, 0)
-            })
-            t:Play()
-            t.Completed:Wait()
-            task.wait(0.08)
-        end
-        task.wait(0.25)
-
-        -- Исчезновение загрузки
-        TweenService:Create(loaderBlur, TweenInfo.new(0.45), {Size = 0}):Play()
-        TweenService:Create(dim, TweenInfo.new(0.45), {BackgroundTransparency = 1}):Play()
-        TweenService:Create(card, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {GroupTransparency = 1}):Play()
-        TweenService:Create(cardScale, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {Scale = 1.08}):Play()
-        task.wait(0.5)
-
-        loaderGui:Destroy()
-        loaderBlur:Destroy()
-    end)
-    if not ok then warn("Loader error: " .. tostring(err)) end
-
-    if unloaded then return end
-    isLoading = false
-    toggleMenu(true) -- после загрузки меню открывается само (дальше: RightShift)
-end)
+        card.
